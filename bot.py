@@ -15,7 +15,7 @@ from telegram.ext import (
 # ─────────────────────────────────────────────
 # AYARLAR — sadece buraya yaz
 # ─────────────────────────────────────────────
-TELEGRAM_TOKEN  = "B8237346432:AAH0lHmI08QqtnJ3yiTa05fUftCIj1t98jA"
+TELEGRAM_TOKEN  = "8237346432:AAH0lHmI08QqtnJ3yiTa05fUftCIj1t98jA"
 SKYSCANNER_KEY  = "uc643373167396223405725428773537"
 # ─────────────────────────────────────────────
 
