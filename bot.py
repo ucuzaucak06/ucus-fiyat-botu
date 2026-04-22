@@ -106,6 +106,48 @@ EUR_RATES = {
 }
 
 
+def fiyat_bul(quote):
+    """
+    Skyscanner Indicative API quote objesinden fiyatı çıkarır.
+    Farklı olası yapıları dener.
+    """
+    # Yöntem 1: minPrice.amount (mikro birim — 1000'e böl)
+    try:
+        amount = quote["minPrice"]["amount"]
+        if amount and float(amount) > 0:
+            return float(amount) / 1000
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # Yöntem 2: price.amount
+    try:
+        amount = quote["price"]["amount"]
+        if amount and float(amount) > 0:
+            return float(amount) / 1000
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # Yöntem 3: minPrice direkt sayı
+    try:
+        amount = quote["minPrice"]
+        if isinstance(amount, (int, float)) and amount > 0:
+            return float(amount)
+    except (KeyError, TypeError):
+        pass
+
+    # Yöntem 4: amount direkt
+    try:
+        amount = quote["amount"]
+        if amount and float(amount) > 0:
+            val = float(amount)
+            # 1000'den büyükse mikro birim varsay
+            return val / 1000 if val > 1000 else val
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    return None
+
+
 def skyscanner_ara(kalkis_iata, varis_iata, tarih_str, market, locale, currency):
     try:
         yil, ay, gun = tarih_str.split("-")
@@ -133,20 +175,51 @@ def skyscanner_ara(kalkis_iata, varis_iata, tarih_str, market, locale, currency)
         }
         r = requests.post(SKYSCANNER_URL, json=payload, headers=headers, timeout=10)
         if r.status_code != 200:
-            logger.warning(f"[{market}] HTTP {r.status_code}: {r.text[:200]}")
+            logger.warning(f"[{market}] HTTP {r.status_code}")
             return None
+
         data = r.json()
-        quotes = data.get("content", {}).get("results", {}).get("quotes", {})
+
+        # İlk market için ham yanıtı logla (debug)
+        if market == "TR":
+            logger.info(f"[DEBUG TR] Ham yanıt: {str(data)[:1000]}")
+
+        # Quotes'u bul — farklı yapı yollarını dene
+        quotes = None
+
+        # Yol 1: content.results.quotes
+        try:
+            quotes = data["content"]["results"]["quotes"]
+        except (KeyError, TypeError):
+            pass
+
+        # Yol 2: quotes direkt
         if not quotes:
+            try:
+                quotes = data["quotes"]
+            except (KeyError, TypeError):
+                pass
+
+        # Yol 3: results.quotes
+        if not quotes:
+            try:
+                quotes = data["results"]["quotes"]
+            except (KeyError, TypeError):
+                pass
+
+        if not quotes:
+            logger.info(f"[{market}] Quote bulunamadı. Yanıt anahtarları: {list(data.keys())}")
             return None
+
         en_ucuz = None
-        for q in quotes.values():
-            fiyat = q.get("minPrice", {}).get("amount")
-            if fiyat:
-                fiyat_sayi = float(fiyat) / 1000
-                if en_ucuz is None or fiyat_sayi < en_ucuz:
-                    en_ucuz = fiyat_sayi
+        for q in (quotes.values() if isinstance(quotes, dict) else quotes):
+            fiyat = fiyat_bul(q)
+            if fiyat is not None and fiyat > 0:
+                if en_ucuz is None or fiyat < en_ucuz:
+                    en_ucuz = fiyat
+
         return en_ucuz
+
     except Exception as e:
         logger.error(f"Hata ({market}): {e}")
         return None
@@ -226,9 +299,9 @@ async def tarih_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sonuclar = []
     for market, locale, currency in MARKETS:
         fiyat = skyscanner_ara(kalkis, varis, tarih, market, locale, currency)
-        if fiyat is not None:
+        if fiyat is not None and fiyat > 0:
             eur = eur_cevir(fiyat, currency)
-            if eur is not None:
+            if eur is not None and eur > 0:
                 sonuclar.append({
                     "market": market,
                     "currency": currency,
@@ -238,9 +311,9 @@ async def tarih_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not sonuclar:
         await update.message.reply_text(
-            "😕 Bu rota için hiçbir markette fiyat bulunamadı.\n"
-            "• IATA kodlarını kontrol et\n"
-            "• Tarihin gelecekte olduğundan emin ol\n\n"
+            "😕 Bu rota için fiyat bulunamadı.\n\n"
+            "Railway Logs'a bakarak [DEBUG TR] satırını bana ilet — "
+            "API yanıtını görerek sorunu çözeyim.\n\n"
             "Yeni arama için /ara yaz"
         )
         return ConversationHandler.END
