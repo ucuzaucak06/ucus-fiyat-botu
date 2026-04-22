@@ -28,11 +28,10 @@ KALKIS = 0
 VARIS = 1
 TARIH = 2
 
-SKYSCANNER_URL = (
-    "https://partners.api.skyscanner.net"
-    "/apiservices/v3/flights/indicative/search"
-)
+BASE_URL = "https://partners.api.skyscanner.net/apiservices/v3"
+HEADERS = {"x-api-key": SKYSCANNER_KEY, "Content-Type": "application/json"}
 
+# Sabit market listesi (Skyscanner'ın desteklediği geçerli kodlar)
 MARKETS = [
     ("TR", "tr-TR", "TRY"),
     ("DE", "de-DE", "EUR"),
@@ -46,7 +45,6 @@ MARKETS = [
     ("CZ", "cs-CZ", "CZK"),
     ("HU", "hu-HU", "HUF"),
     ("RO", "ro-RO", "RON"),
-    ("BG", "bg-BG", "BGN"),
     ("GR", "el-GR", "EUR"),
     ("PT", "pt-PT", "EUR"),
     ("SE", "sv-SE", "SEK"),
@@ -62,16 +60,12 @@ MARKETS = [
     ("IN", "en-IN", "INR"),
     ("AE", "en-AE", "AED"),
     ("SA", "ar-SA", "SAR"),
-    ("EG", "ar-EG", "EGP"),
-    ("ZA", "en-ZA", "ZAR"),
     ("JP", "ja-JP", "JPY"),
     ("SG", "en-SG", "SGD"),
     ("TH", "th-TH", "THB"),
     ("MX", "es-MX", "MXN"),
     ("BR", "pt-BR", "BRL"),
-    ("KW", "ar-KW", "KWD"),
-    ("QA", "ar-QA", "QAR"),
-    ("HK", "zh-HK", "HKD"),
+    ("ZA", "en-ZA", "ZAR"),
 ]
 
 EUR_RATES = {
@@ -84,21 +78,16 @@ EUR_RATES = {
     "INR": 0.011,
     "AED": 0.25,
     "SAR": 0.25,
-    "EGP": 0.019,
     "ZAR": 0.050,
     "JPY": 0.0063,
     "SGD": 0.69,
     "THB": 0.026,
     "MXN": 0.053,
     "BRL": 0.18,
-    "KWD": 3.00,
-    "QAR": 0.25,
-    "HKD": 0.12,
     "PLN": 0.23,
     "CZK": 0.041,
     "HUF": 0.0026,
     "RON": 0.20,
-    "BGN": 0.51,
     "SEK": 0.088,
     "NOK": 0.086,
     "DKK": 0.134,
@@ -106,49 +95,8 @@ EUR_RATES = {
 }
 
 
-def fiyat_bul(quote):
-    """
-    Skyscanner Indicative API quote objesinden fiyatı çıkarır.
-    Farklı olası yapıları dener.
-    """
-    # Yöntem 1: minPrice.amount (mikro birim — 1000'e böl)
-    try:
-        amount = quote["minPrice"]["amount"]
-        if amount and float(amount) > 0:
-            return float(amount) / 1000
-    except (KeyError, TypeError, ValueError):
-        pass
-
-    # Yöntem 2: price.amount
-    try:
-        amount = quote["price"]["amount"]
-        if amount and float(amount) > 0:
-            return float(amount) / 1000
-    except (KeyError, TypeError, ValueError):
-        pass
-
-    # Yöntem 3: minPrice direkt sayı
-    try:
-        amount = quote["minPrice"]
-        if isinstance(amount, (int, float)) and amount > 0:
-            return float(amount)
-    except (KeyError, TypeError):
-        pass
-
-    # Yöntem 4: amount direkt
-    try:
-        amount = quote["amount"]
-        if amount and float(amount) > 0:
-            val = float(amount)
-            # 1000'den büyükse mikro birim varsay
-            return val / 1000 if val > 1000 else val
-    except (KeyError, TypeError, ValueError):
-        pass
-
-    return None
-
-
 def skyscanner_ara(kalkis_iata, varis_iata, tarih_str, market, locale, currency):
+    """Tek bir market için Skyscanner Indicative fiyatını çeker."""
     try:
         yil, ay, gun = tarih_str.split("-")
         payload = {
@@ -169,54 +117,45 @@ def skyscanner_ara(kalkis_iata, varis_iata, tarih_str, market, locale, currency)
                 ],
             }
         }
-        headers = {
-            "x-api-key": SKYSCANNER_KEY,
-            "Content-Type": "application/json",
-        }
-        r = requests.post(SKYSCANNER_URL, json=payload, headers=headers, timeout=10)
+        headers = {"x-api-key": SKYSCANNER_KEY, "Content-Type": "application/json"}
+        r = requests.post(
+            f"{BASE_URL}/flights/indicative/search",
+            json=payload,
+            headers=headers,
+            timeout=10,
+        )
+
         if r.status_code != 200:
             logger.warning(f"[{market}] HTTP {r.status_code}")
             return None
 
         data = r.json()
 
-        # İlk market için ham yanıtı logla (debug)
+        # İlk başarılı yanıtı logla
         if market == "TR":
-            logger.info(f"[DEBUG TR] Ham yanıt: {str(data)[:1000]}")
+            import json
+            logger.info(f"[DEBUG-TR] {json.dumps(data)[:800]}")
 
-        # Quotes'u bul — farklı yapı yollarını dene
-        quotes = None
-
-        # Yol 1: content.results.quotes
-        try:
-            quotes = data["content"]["results"]["quotes"]
-        except (KeyError, TypeError):
-            pass
-
-        # Yol 2: quotes direkt
-        if not quotes:
-            try:
-                quotes = data["quotes"]
-            except (KeyError, TypeError):
-                pass
-
-        # Yol 3: results.quotes
-        if not quotes:
-            try:
-                quotes = data["results"]["quotes"]
-            except (KeyError, TypeError):
-                pass
+        quotes = (
+            data.get("content", {})
+                .get("results", {})
+                .get("quotes", {})
+        )
 
         if not quotes:
-            logger.info(f"[{market}] Quote bulunamadı. Yanıt anahtarları: {list(data.keys())}")
             return None
 
         en_ucuz = None
-        for q in (quotes.values() if isinstance(quotes, dict) else quotes):
-            fiyat = fiyat_bul(q)
-            if fiyat is not None and fiyat > 0:
-                if en_ucuz is None or fiyat < en_ucuz:
-                    en_ucuz = fiyat
+        for q in quotes.values():
+            try:
+                amount_str = q["minPrice"]["amount"]
+                # amount string olarak geliyor, örn: "1250" (tam birim, kuruş/cent değil)
+                amount = float(amount_str)
+                if amount > 0:
+                    if en_ucuz is None or amount < en_ucuz:
+                        en_ucuz = amount
+            except (KeyError, TypeError, ValueError):
+                continue
 
         return en_ucuz
 
@@ -232,10 +171,12 @@ def eur_cevir(miktar, para_birimi):
     return round(miktar * kur, 2)
 
 
+# ── TELEGRAM KOMUTLARI ─────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✈️ *Uçuş Fiyat Karşılaştırma Botuna Hoşgeldin!*\n\n"
-        "30+ ülke pazarında Skyscanner fiyatlarını karşılaştırır ve en ucuzunu bulur.\n\n"
+        "33 ülke pazarında Skyscanner fiyatlarını karşılaştırır ve en ucuzunu bulur.\n\n"
         "Başlamak için /ara komutunu kullan.",
         parse_mode="Markdown",
     )
@@ -292,16 +233,16 @@ async def tarih_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"🔍 *{kalkis} → {varis}* ({tarih}) için\n"
-        f"37 ülke pazarında fiyatlar aranıyor...\n\n⏳ _30-60 saniye sürebilir, bekle..._",
+        f"33 ülke pazarında fiyatlar aranıyor...\n\n⏳ _30-60 saniye sürebilir, bekle..._",
         parse_mode="Markdown",
     )
 
     sonuclar = []
     for market, locale, currency in MARKETS:
         fiyat = skyscanner_ara(kalkis, varis, tarih, market, locale, currency)
-        if fiyat is not None and fiyat > 0:
+        if fiyat and fiyat > 0:
             eur = eur_cevir(fiyat, currency)
-            if eur is not None and eur > 0:
+            if eur and eur > 0:
                 sonuclar.append({
                     "market": market,
                     "currency": currency,
@@ -312,8 +253,10 @@ async def tarih_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sonuclar:
         await update.message.reply_text(
             "😕 Bu rota için fiyat bulunamadı.\n\n"
-            "Railway Logs'a bakarak [DEBUG TR] satırını bana ilet — "
-            "API yanıtını görerek sorunu çözeyim.\n\n"
+            "Olası nedenler:\n"
+            "• Bu tarihte bu rota için Skyscanner'da veri yok\n"
+            "• IATA kodlarını kontrol et\n"
+            "• Farklı bir tarih dene\n\n"
             "Yeni arama için /ara yaz"
         )
         return ConversationHandler.END
@@ -335,7 +278,7 @@ async def tarih_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mesaj += "\n━━━━━━━━━━━━━━━━━━━━\n"
     mesaj += f"💰 *En ucuz pazar:* `{en_ucuz['market']}` — *{en_ucuz['fiyat_eur']:.0f} EUR*\n\n"
     mesaj += f"_Toplam {len(sonuclar)} pazarda fiyat bulundu._\n"
-    mesaj += "_Fiyatlar gösterge niteliğindedir._\n\n"
+    mesaj += "_Fiyatlar gösterge niteliğindedir (Skyscanner cache)._\n\n"
     mesaj += "🔄 Yeni arama için /ara yaz"
 
     await update.message.reply_text(mesaj, parse_mode="Markdown")
